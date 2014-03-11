@@ -54,48 +54,79 @@ def FATAL(*objs):
 	ERROR (*objs)
 	sys.exit(1)
 
-def parse_file(fullpath):
+def parse_definition(files, definition):
+	# Should it be documented (should be made configurable)
+	if definition.get('kind') in ('namespace'):
+		return files
+	
+	if (definition.get('kind') == 'function' and
+		definition.get('static') == 'yes'):
+		return files
+	
+	# Is the definition documented?
+	documented = False
+	for k in ('briefdescription', 'detaileddescription', 'inbodydescription'):
+		if definition.findall("./%s/"%(k)):
+			documented = True
+			break
+	
+	# Name
+	d_def = definition.find('./definition')
+	d_nam = definition.find('./name')
+	d_arg = definition.find('./argsstring')
+	line = -1
+	
+	l = definition.find('./location')
+	if l is not None:
+		filename = l.get('file')
+		line = l.get("line")
+	else:
+		return files
+	
+	# Information available?
+	if line is None or filename is None:
+		return files
+	
+	# Refers to a real/existing file?
+	if not os.path.isfile(filename):
+		print("skip %s " % (str(definition)))
+		return files
+	
+	if d_def is not None:
+		name = d_def.text
+	elif d_nam is not None:
+		name = d_nam.text
+	else:
+		name = definition.get('id')
+	
+	# make unique ID (in case of overloaded functions)
+	defid= name
+	
+	if d_arg is not None:
+		defid= "%s%s" % (name, d_arg.text)
+	
+	# merge into existing definitions
+	definitions= {}
+	if filename in files:
+		definitions= files[filename]
+
+	definitions[defid]= (int(line), documented)
+	files[filename]= definitions
+	
+	return files
+
+def parse_file(files, fullpath):
 	tree = ET.parse(fullpath)
 
-	sourcefile  = None
-	definitions = {}
+	# walk over compounds (classes, files, namespaces, ...)
+	for compound in tree.iter("compounddef"):
+		files= parse_definition(files, compound)
+		
+		# ... and their members (typedefs, functions, ...)
+		for definition in compound.iter("memberdef"):
+			files= parse_definition(files, definition)
 
-	for definition in tree.findall("./compounddef//memberdef"):
-		# Should it be documented
-		if (definition.get('kind') == 'function' and
-			definition.get('static') == 'yes'):
-			continue
-
-		# Is the definition documented?
-		documented = False
-		for k in ('briefdescription', 'detaileddescription', 'inbodydescription'):
-			if definition.findall("./%s/"%(k)):
-				documented = True
-				break
-
-		# Name
-		d_def = definition.find('./definition')
-		d_nam = definition.find('./name')
-
-		if not sourcefile:
-			l = definition.find('./location')
-			if l is not None:
-				sourcefile = l.get('file')
-
-		if d_def is not None:
-			name = d_def.text
-		elif d_nam is not None:
-			name = d_nam.text
-		else:
-			name = definition.get('id')
-
-		# Aggregate
-		definitions[name] = documented
-
-	if not sourcefile:
-		sourcefile = fullpath
-
-	return (sourcefile, definitions)
+	return files
 
 
 def parse(path):
@@ -107,12 +138,13 @@ def parse(path):
 
 	files = {}
 	for entry in tree.findall('compound'):
-		if entry.get('kind') in ('dir'):
+		if entry.get('kind') in ('dir', 'group'):
 			continue
 
 		file_fp = os.path.join (path, "%s.xml" %(entry.get('refid')))
-		tmp = parse_file (file_fp)
-		files[tmp[0]] = tmp[1]
+		
+		if os.path.isfile(file_fp):
+			files= parse_file (files, file_fp)
 
 	return files
 
@@ -142,8 +174,8 @@ def report (files):
 		if not defs:
 			continue
 
-		doc_yes = len([d for d in defs.values() if d])
-		doc_no  = len([d for d in defs.values() if not d])
+		doc_yes = len([d for (_,d) in defs.values() if d])
+		doc_no  = len([d for (_,d) in defs.values() if not d])
 		doc_per = doc_yes * 100.0 / (doc_yes + doc_no)
 
 		total_yes += doc_yes
@@ -154,8 +186,9 @@ def report (files):
 		defs_sorted = defs.keys()
 		defs_sorted.sort()
 		for d in defs_sorted:
-			if not defs[d]:
-				print ("\t", d)
+			(line, state) = defs[d]
+			if not state:
+				print (" L: %4d - %s" % (line, d))
 
 	total_all = total_yes + total_no
 	total_per = total_yes * 100 / total_all
