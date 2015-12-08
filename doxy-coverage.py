@@ -92,6 +92,9 @@ def parse_definition(files, definition):
 		print("skip %s " % (str(definition)))
 		return files
 	
+	# resolve symlink
+	filename= os.path.realpath(filename)
+    
 	if d_def is not None:
 		name = d_def.text
 	elif d_nam is not None:
